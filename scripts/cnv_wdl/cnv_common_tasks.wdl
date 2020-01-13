@@ -188,6 +188,7 @@ task CollectCounts {
       File ref_fasta
       File ref_fasta_fai
       File ref_fasta_dict
+      Array[String] disabled_read_filters
       Boolean? enable_indexing
       String? format
       File? gatk4_jar_override
@@ -199,6 +200,15 @@ task CollectCounts {
       Boolean use_ssd = false
       Int? cpu
       Int? preemptible_attempts
+    }
+
+    parameter_meta {
+      bam: {
+        localization_optional: true
+      }
+      bam_idx: {
+        localization_optional: true
+      }
     }
 
     Int machine_mem_mb = select_first([mem_gb, 7]) * 1000
@@ -257,7 +267,8 @@ task CollectCounts {
             --reference ~{ref_fasta} \
             --format ~{default="HDF5" hdf5_or_tsv_or_null_format} \
             --interval-merging-rule OVERLAPPING_ONLY \
-            --output ~{counts_filename_for_collect_read_counts}
+            --output ~{counts_filename_for_collect_read_counts} \
+            ~{sep=' ' disabled_read_filters}
 
         if [ ~{do_block_compression} = "true" ]; then
             bgzip ~{counts_filename_for_collect_read_counts}
@@ -301,6 +312,15 @@ task CollectAllelicCounts {
       Boolean use_ssd = false
       Int? cpu
       Int? preemptible_attempts
+    }
+
+    parameter_meta {
+      bam: {
+        localization_optional: true
+      }
+      bam_idx: {
+        localization_optional: true
+      }
     }
 
     Int machine_mem_mb = select_first([mem_gb, 13]) * 1000
