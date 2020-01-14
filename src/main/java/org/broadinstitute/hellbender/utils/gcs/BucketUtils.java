@@ -116,7 +116,7 @@ public final class BucketUtils {
                 FileSystem fs = file.getFileSystem(new Configuration());
                 inputStream = fs.open(file);
             } else {
-                 inputStream = new FileInputStream(path);
+                 inputStream = new GATKPathSpecifier(path).getInputStream();
             }
 
             if(IOUtil.hasBlockCompressedExtension(path)){
