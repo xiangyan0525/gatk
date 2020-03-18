@@ -188,7 +188,7 @@ task CollectCounts {
       File ref_fasta
       File ref_fasta_fai
       File ref_fasta_dict
-      Array[String] disabled_read_filters
+      Array[String]? disabled_read_filters
       Boolean? enable_indexing
       String? format
       File? gatk4_jar_override
@@ -215,6 +215,14 @@ task CollectCounts {
     Int command_mem_mb = machine_mem_mb - 1000
 
     Boolean enable_indexing_ = select_first([enable_indexing, false])
+    Array[String] disabled_read_filters_arr = if(defined(disabled_read_filters))
+      then
+        prefix(
+          "--disable-read-filter ",
+          select_first([disabled_read_filters])
+        )
+      else
+        []
 
     # Sample name is derived from the bam filename
     String base_filename = basename(bam, ".bam")
@@ -268,7 +276,7 @@ task CollectCounts {
             --format ~{default="HDF5" hdf5_or_tsv_or_null_format} \
             --interval-merging-rule OVERLAPPING_ONLY \
             --output ~{counts_filename_for_collect_read_counts} \
-            ~{sep=' ' disabled_read_filters}
+            ~{sep=' ' disabled_read_filters_arr}
 
         if [ ~{do_block_compression} = "true" ]; then
             bgzip ~{counts_filename_for_collect_read_counts}
@@ -433,113 +441,6 @@ task ScatterIntervals {
     }
 }
 
-task PostprocessGermlineCNVCalls {
-    input {
-      String entity_id
-      File invariants_tar
-      Array[File] gcnv_calls_tars
-      Array[File] gcnv_model_tars
-      Array[File] calling_configs
-      Array[File] denoising_configs
-      Array[File] gcnvkernel_version
-      Array[File] sharded_interval_lists
-      File contig_ploidy_calls_tar
-      Array[String]? allosomal_contigs
-      Int ref_copy_number_autosomal_contigs
-      Int sample_index
-      File? gatk4_jar_override
-
-      # Runtime parameters
-      String gatk_docker
-      Int? mem_gb
-      Int? disk_space_gb
-      Boolean use_ssd = false
-      Int? cpu
-      Int? preemptible_attempts
-    }
-
-    Int machine_mem_mb = select_first([mem_gb, 7]) * 1000
-    Int command_mem_mb = machine_mem_mb - 1000
-
-    String genotyped_intervals_vcf_filename = "genotyped-intervals-~{entity_id}.vcf.gz"
-    String genotyped_segments_vcf_filename = "genotyped-segments-~{entity_id}.vcf.gz"
-    String denoised_copy_ratios_filename = "denoised_copy_ratios-~{entity_id}.tsv"
-
-    Array[String] allosomal_contigs_args = if defined(allosomal_contigs) then prefix("--allosomal-contig ", select_first([allosomal_contigs])) else []
-
-    command <<<
-        set -eu
-        export GATK_LOCAL_JAR=~{default="/root/gatk.jar" gatk4_jar_override}
-
-        # untar calls to CALLS_0, CALLS_1, etc directories and build the command line
-        # also copy over shard config and interval files
-        time tar xzf ~{invariants_tar}
-        rm ~{invariants_tar}
-        number_of_shards=`find . -name 'CALLS_*' | wc -l`
-
-        touch calls_and_model_args.txt
-        for i in $(seq 0 `expr $number_of_shards - 1`); do
-            echo "--calls-shard-path CALLS_$i" >> calls_and_model_args.txt
-            echo "--model-shard-path MODEL_$i" >> calls_and_model_args.txt
-        done
-
-        mkdir -p extracted-contig-ploidy-calls
-        tar xzf ~{contig_ploidy_calls_tar} -C extracted-contig-ploidy-calls
-        rm ~{contig_ploidy_calls_tar}
-
-        # untar calls to CALLS_0, CALLS_1, etc directories and build the command line
-        # also copy over shard config and interval files
-        gcnv_calls_tar_array=(~{sep=" " gcnv_calls_tars})
-        calling_configs_array=(~{sep=" " calling_configs})
-        denoising_configs_array=(~{sep=" " denoising_configs})
-        gcnvkernel_version_array=(~{sep=" " gcnvkernel_version})
-        sharded_interval_lists_array=(~{sep=" " sharded_interval_lists})
-        calls_args=""
-        for index in ${!gcnv_calls_tar_array[@]}; do
-            gcnv_calls_tar=${gcnv_calls_tar_array[$index]}
-            mkdir -p CALLS_$index/SAMPLE_~{sample_index}
-            tar xzf $gcnv_calls_tar -C CALLS_$index/SAMPLE_~{sample_index}
-            cp ${calling_configs_array[$index]} CALLS_$index/
-            cp ${denoising_configs_array[$index]} CALLS_$index/
-            cp ${gcnvkernel_version_array[$index]} CALLS_$index/
-            cp ${sharded_interval_lists_array[$index]} CALLS_$index/
-            calls_args="$calls_args --calls-shard-path CALLS_$index"
-        done
-
-        mkdir contig-ploidy-calls
-        tar xzf ~{contig_ploidy_calls_tar} -C contig-ploidy-calls
-
-        gatk --java-options "-Xmx~{command_mem_mb}m" PostprocessGermlineCNVCalls \
-            $calls_args \
-            $model_args \
-            ~{sep=" " allosomal_contigs_args} \
-            --autosomal-ref-copy-number ~{ref_copy_number_autosomal_contigs} \
-            --contig-ploidy-calls contig-ploidy-calls \
-            --sample-index ~{sample_index} \
-            --output-genotyped-intervals ~{genotyped_intervals_vcf_filename} \
-            --output-genotyped-segments ~{genotyped_segments_vcf_filename} \
-            --output-denoised-copy-ratios ~{denoised_copy_ratios_filename}
-
-        rm -rf CALLS_*
-        rm -rf MODEL_*
-        rm -rf contig-ploidy-calls
-    >>>
-
-    runtime {
-        docker: gatk_docker
-        memory: machine_mem_mb + " MB"
-        disks: "local-disk " + select_first([disk_space_gb, 40]) + if use_ssd then " SSD" else " HDD"
-        cpu: select_first([cpu, 1])
-        preemptible: select_first([preemptible_attempts, 5])
-    }
-
-    output {
-        File genotyped_intervals_vcf = genotyped_intervals_vcf_filename
-        File genotyped_segments_vcf = genotyped_segments_vcf_filename
-        File denoised_copy_ratios = denoised_copy_ratios_filename
-    }
-}
-
 task BundledPostprocessGermlineCNVCalls {
     input {
         File invariants_tar
@@ -569,7 +470,9 @@ task BundledPostprocessGermlineCNVCalls {
 
     String genotyped_intervals_vcf_filename = "genotyped-intervals-~{entity_id}.vcf.gz"
     String genotyped_segments_vcf_filename = "genotyped-segments-~{entity_id}.vcf.gz"
-    Boolean allosomal_contigs_specified = defined(allosomal_contigs)
+    String denoised_copy_ratios_filename = "denoised_copy_ratios-~{entity_id}.tsv"
+
+    Array[String] allosomal_contigs_args = if defined(allosomal_contigs) then prefix("--allosomal-contig ", select_first([allosomal_contigs])) else []
 
     command <<<
         set -euo pipefail
@@ -578,7 +481,7 @@ task BundledPostprocessGermlineCNVCalls {
 
         # untar calls to CALLS_0, CALLS_1, etc directories and build the command line
         # also copy over shard config and interval files
-        time tar xzf ~{invariants_tar}
+        tar xzf ~{invariants_tar}
         rm ~{invariants_tar}
         number_of_shards=`find . -name 'CALLS_*' | wc -l`
 
@@ -592,22 +495,23 @@ task BundledPostprocessGermlineCNVCalls {
         tar xzf ~{contig_ploidy_calls_tar} -C extracted-contig-ploidy-calls
         rm ~{contig_ploidy_calls_tar}
 
-        allosomal_contigs_args="--allosomal-contig ~{sep=" --allosomal-contig " allosomal_contigs}"
-
         time gatk --java-options "-Xmx~{command_mem_mb}m" PostprocessGermlineCNVCalls \
              --arguments_file calls_and_model_args.txt \
-            ~{true="$allosomal_contigs_args" false="" allosomal_contigs_specified} \
+            ~{sep=" " allosomal_contigs_args} \
             --autosomal-ref-copy-number ~{ref_copy_number_autosomal_contigs} \
             --contig-ploidy-calls extracted-contig-ploidy-calls \
             --sample-index ~{sample_index} \
             --output-genotyped-intervals ~{genotyped_intervals_vcf_filename} \
-            --output-genotyped-segments ~{genotyped_segments_vcf_filename}
+            --output-genotyped-segments ~{genotyped_segments_vcf_filename} \
+            --output-denoised-copy-ratios ~{denoised_copy_ratios_filename}
 
-        rm -Rf extracted-contig-ploidy-calls
+        rm -rf CALLS_*
+        rm -rf MODEL_*
+        rm -rf extracted-contig-ploidy-calls
     >>>
 
     runtime {
-        docker: "~{gatk_docker}"
+        docker: gatk_docker
         memory: machine_mem_mb + " MB"
         disks: "local-disk " + select_first([disk_space_gb, vm_disk_size]) + if use_ssd then " SSD" else " HDD"
         cpu: select_first([cpu, 1])
@@ -618,6 +522,7 @@ task BundledPostprocessGermlineCNVCalls {
     output {
         File genotyped_intervals_vcf = genotyped_intervals_vcf_filename
         File genotyped_segments_vcf = genotyped_segments_vcf_filename
+        File denoised_copy_ratios = denoised_copy_ratios_filename
     }
 }
 
@@ -782,5 +687,51 @@ task BundlePostprocessingInvariants {
 
     output {
         File bundle_tar = "case-gcnv-postprocessing-invariants.tar.gz"
+    }
+}
+
+task ScatterPloidyCallsBySample {
+    input {
+      File contig_ploidy_calls_tar
+      Array[String] samples
+
+      # Runtime parameters
+      String docker
+      Int? mem_gb
+      Int? disk_space_gb
+      Boolean use_ssd = false
+      Int? cpu
+      Int? preemptible_attempts
+    }
+
+    Int num_samples = length(samples)
+    String out_dir = "calls_renamed"
+
+    command <<<
+      set -eu
+
+      # Extract ploidy calls
+      mkdir calls
+      tar xzf ~{contig_ploidy_calls_tar} -C calls/
+
+      # Archive call files by sample, renaming so they will be glob'd in order
+      sample_ids=(~{sep=" " samples})
+      for (( i=0; i<~{num_samples}; i++ ))
+      do
+        sample_id=${sample_ids[$i]}
+        sample_no=`printf %04d $i`
+        tar -czf sample_${sample_no}.${sample_id}.contig_ploidy_calls.tar.gz -C calls/SAMPLE_${i} .
+      done
+    >>>
+    runtime {
+        docker: docker
+        memory: select_first([mem_gb, 2]) + " GiB"
+        disks: "local-disk " + select_first([disk_space_gb, 10]) + if use_ssd then " SSD" else " HDD"
+        cpu: select_first([cpu, 1])
+        preemptible: select_first([preemptible_attempts, 5])
+    }
+
+    output {
+        Array[File] sample_contig_ploidy_calls_tar = glob("sample_*.contig_ploidy_calls.tar.gz")
     }
 }
