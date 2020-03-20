@@ -2,6 +2,7 @@ package org.broadinstitute.hellbender.engine.spark.datasources;
 
 import htsjdk.samtools.SAMFileHeader;
 import htsjdk.samtools.SAMRecord;
+import htsjdk.samtools.SamReaderFactory;
 import htsjdk.samtools.ValidationStringency;
 import org.apache.hadoop.fs.Path;
 import org.apache.hadoop.mapreduce.Job;
@@ -26,6 +27,8 @@ import org.disq_bio.disq.HtsjdkReadsTraversalParameters;
 
 import java.io.IOException;
 import java.io.Serializable;
+import java.nio.file.Files;
+import java.util.Collections;
 import java.util.List;
 import java.util.Objects;
 
@@ -169,16 +172,22 @@ public final class ReadsSparkSource implements Serializable {
      * @return the header for the bam.
      */
     public SAMFileHeader getHeader(final String filePath, final String referencePath) {
+        final String cramReferencePath = checkCramReference(ctx, filePath, referencePath);
+
         // GCS case
         if (BucketUtils.isCloudStorageUrl(filePath)) {
-            try (ReadsDataSource readsDataSource = new ReadsDataSource(IOUtils.getPath(filePath))) {
-                return readsDataSource.getHeader();
+            final SamReaderFactory factory = SamReaderFactory.makeDefault().validationStringency(validationStringency);
+            try (ReadsDataSource readsDataSource = new ReadsDataSource(
+                    Collections.singletonList(IOUtils.getPath(filePath)),
+                    cramReferencePath == null ?
+                            factory :
+                            factory.referenceSequence(IOUtils.getPath(referencePath)))) {
+                 return readsDataSource.getHeader();
             }
         }
 
         // local file or HDFs case
         try {
-            String cramReferencePath = checkCramReference(ctx, filePath, referencePath);
             return HtsjdkReadsRddStorage.makeDefault(ctx)
                     .validationStringency(validationStringency)
                     .referenceSourcePath(cramReferencePath)
@@ -199,9 +208,16 @@ public final class ReadsSparkSource implements Serializable {
                 throw new UserException.MissingReference("A reference is required for CRAM input");
             } else if (ReferenceTwoBitSparkSource.isTwoBit(referencePath)) { // htsjdk can't handle 2bit reference files
                 throw new UserException("A 2bit file cannot be used as a CRAM file reference");
-            } else {
+            } else if (BucketUtils.isHadoopUrl(referencePath)) {
+                // For Hadoop file system, use a org.apache.hadoop.fs.Path
                 final Path refPath = new Path(referencePath);
                 if (!SparkUtils.pathExists(ctx, refPath)) {
+                    throw new UserException.MissingReference("The specified fasta file (" + referencePath + ") does not exist.");
+                }
+            } else {
+                // For local or GCS, use nio Path
+                final java.nio.file.Path nioReferencePath = IOUtils.getPath(referencePath);
+                if (!Files.exists(nioReferencePath)) {
                     throw new UserException.MissingReference("The specified fasta file (" + referencePath + ") does not exist.");
                 }
             }
