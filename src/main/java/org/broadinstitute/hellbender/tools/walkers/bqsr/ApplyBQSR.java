@@ -70,7 +70,7 @@ import java.io.File;
         programGroup = ReadDataManipulationProgramGroup.class
 )
 @DocumentedFeature
-public final class ApplyBQSR extends ReadWalker{
+public final class ApplyBQSR extends ReadWalker {
     static final String USAGE_ONE_LINE_SUMMARY = "Apply base quality score recalibration";
     static final String USAGE_SUMMARY = "Apply a linear base quality recalibration model trained with the BaseRecalibrator tool.";
 

@@ -448,4 +448,9 @@ public final class CigarUtils {
         }
         return refBasesClipped;
     }
+
+    public static boolean containsIndels(final Cigar cigar){
+        Utils.nonNull(cigar, "the input cigar must not be null");
+        return cigar.getCigarElements().stream().anyMatch(e -> e.getOperator().isIndel());
+    }
 }
