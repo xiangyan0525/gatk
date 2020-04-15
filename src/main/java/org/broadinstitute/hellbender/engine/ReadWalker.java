@@ -46,7 +46,7 @@ public abstract class ReadWalker extends WalkerBase {
      * Marked final so that tool authors don't override it. Tool authors should override onTraversalStart() instead.
      */
     @Override
-    protected void onStartup() {
+    protected final void onStartup() {
         super.onStartup();
 
         setReadTraversalBounds();
@@ -170,13 +170,5 @@ public abstract class ReadWalker extends WalkerBase {
 
     public void postProcess(){
         return;
-    }
-
-    public GATKRead peekFirstRead(){
-        if (reads.iterator().hasNext()){
-            return reads.iterator().next();
-        }
-        // Maybe the correct thing to do is for this to return an error when the user input is empty
-        return null;
     }
 }

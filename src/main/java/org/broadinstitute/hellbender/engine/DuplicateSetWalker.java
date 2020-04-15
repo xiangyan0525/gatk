@@ -1,11 +1,10 @@
 package org.broadinstitute.hellbender.engine;
 
-import org.broadinstitute.hellbender.tools.walkers.mutect.consensus.DuplicateSet;
+import org.broadinstitute.barclay.argparser.Argument;
+import org.broadinstitute.hellbender.exceptions.UserException;
+import org.broadinstitute.hellbender.tools.walkers.consensus.ReadSetWithSharedUMI;
 import org.broadinstitute.hellbender.utils.Utils;
 import org.broadinstitute.hellbender.utils.read.GATKRead;
-
-import java.util.List;
-import java.util.stream.Collectors;
 
 /**
  * A walker that processes duplicate reads that share the same UMI as a single unit.
@@ -14,17 +13,13 @@ import java.util.stream.Collectors;
  * http://fulcrumgenomics.github.io/fgbio/tools/latest/GroupReadsByUmi.html
  */
 public abstract class DuplicateSetWalker extends ReadWalker {
-    DuplicateSet currentDuplicateSet; // TODO: does it make sense to call clear() and recycle the same object?
-    public static int INITIAL_MOLECULAR_ID = -1;
+    public static final String MIN_REQUIRED_READS_NAME = "min";
+    private static final int DEFAULT_MINIMUM_READS_IN_DUPLICATE_SET = 1;
 
-    @Override
-    public final void onStartup(){
-        // TODO: I had to make onStartUp of ReadWalker not final to do this. The right thing to do here is to
-        // write a ReadWalkerBase parent class for both ReadWalker and DuplicateSet Walker, as Louis suggested.
-        super.onStartup();
-        currentDuplicateSet = new DuplicateSet();
-        currentDuplicateSet.setMoleduleId(INITIAL_MOLECULAR_ID);
-    }
+    @Argument(fullName = MIN_REQUIRED_READS_NAME, optional = true)
+    private int minimumRequiredReadsInDuplicateSet = DEFAULT_MINIMUM_READS_IN_DUPLICATE_SET;
+
+    private ReadSetWithSharedUMI currentReadSetWithSharedUMI = new ReadSetWithSharedUMI();
 
     /***
      * FGBio GroupByUMI returns reads sorted by molecular ID: For example, the input bam may look like
@@ -40,44 +35,62 @@ public abstract class DuplicateSetWalker extends ReadWalker {
      * we encounter the next molecular ID, at which point we pass the list to the {@code apply}
      * method of the child class and clear the {@code currentDuplicateSet} variable.
      *
+     * Marked final to discourage subclassing. A subclass must override the other apply() method that takes in the DuplicateSet.
+     * Marked public to match the parent method signature.
      */
     @Override
-    public void apply(GATKRead read, ReferenceContext referenceContext, FeatureContext featureContext) {
-        if (currentDuplicateSet.getMoleculeId() != DuplicateSet.getMoleculeID(read)) {
-            if (rejectDuplicateSet(currentDuplicateSet)){
-                currentDuplicateSet = new DuplicateSet(read);
+    public final void apply(GATKRead read, ReferenceContext referenceContext, FeatureContext featureContext) {
+        final int readMoleculeID = ReadSetWithSharedUMI.getMoleculeID(read);
+        final int duplicateSetMoleculeId = currentReadSetWithSharedUMI.getMoleculeId();
+
+        // If the incoming read has the molecular id less than that of the currentDuplicateSet,
+        // the bam is not sorted properly by the MI tag
+        if (duplicateSetMoleculeId > readMoleculeID){
+            throw new UserException("The input bam must be sorted by the molecularID tag.");
+        } else if (duplicateSetMoleculeId < readMoleculeID) {
+            // If the currentDuplicateSet is empty or does not match the incoming read,
+            // call apply() method on the current duplicate set, and replace it with a new set with the most recent read in it
+            if (rejectDuplicateSet(currentReadSetWithSharedUMI)){
+                currentReadSetWithSharedUMI = new ReadSetWithSharedUMI(read);
                 return;
             }
 
-            apply(currentDuplicateSet,
-                    new ReferenceContext(reference, currentDuplicateSet.getDuplicateSetInterval()), // Will create an empty ReferenceContext if reference or readInterval == null
-                    new FeatureContext(features, currentDuplicateSet.getDuplicateSetInterval()));
-            currentDuplicateSet = new DuplicateSet(read);
+            apply(currentReadSetWithSharedUMI,
+                    new ReferenceContext(reference, currentReadSetWithSharedUMI.getDuplicateSetInterval()), // Will create an empty ReferenceContext if reference or readInterval == null
+                    new FeatureContext(features, currentReadSetWithSharedUMI.getDuplicateSetInterval()));
+            currentReadSetWithSharedUMI = new ReadSetWithSharedUMI(read);
         } else {
-            Utils.validate(currentDuplicateSet.addRead(read), "Adding a read that doesn't have a matching molecular ID tag");
+            // the molecule ID of the read matches that of the current duplicate set
+            Utils.validate(currentReadSetWithSharedUMI.addRead(read), "Adding a read that doesn't have a matching molecular ID tag");
         }
     }
 
-    public abstract void apply(DuplicateSet duplicateSet, ReferenceContext referenceContext, FeatureContext featureContext );
+    /**
+     * A subclass must specify how to process the duplicate sets by overriding this method.
+     *
+     * @param readSetWithSharedUMI A set of reads with the matching UMIs with the same fragment start and end
+     * @param referenceContext A reference context object over the intervals determined by the duplicate set.
+     * @param featureContext Entries from a secondary feature file (e.g. vcf) if provided
+     *
+     */
+    public abstract void apply(ReadSetWithSharedUMI readSetWithSharedUMI, ReferenceContext referenceContext, FeatureContext featureContext );
 
-    protected boolean rejectDuplicateSet(final DuplicateSet duplicateSet){
-        if (!duplicateSet.hasValidInterval()) {
-            logger.info("Duplicate Set with Invalid Intervals");
-            logger.info("Number of reads:" + currentDuplicateSet.getReads().size());
-            if (currentDuplicateSet.getReads().size() > 0) {
-                logger.info("First read: " + currentDuplicateSet.getReads().get(0));
-            }
-        }
 
-        return !duplicateSet.hasValidInterval();
+    /**
+     * Returns true for duplicate sets that does not meet required criteria for further processing.
+     *
+     * A subclass may override this method to meet its needs.
+     */
+    protected boolean rejectDuplicateSet(final ReadSetWithSharedUMI readSetWithSharedUMI){
+        return !readSetWithSharedUMI.hasValidInterval() || readSetWithSharedUMI.getReads().size() < minimumRequiredReadsInDuplicateSet;
     }
 
     @Override
     public void postProcess(){
-        if (currentDuplicateSet.getReads().size() > 0){
-            apply(currentDuplicateSet,
-                    new ReferenceContext(reference, currentDuplicateSet.getDuplicateSetInterval()),
-                    new FeatureContext(features, currentDuplicateSet.getDuplicateSetInterval()));
+        if (currentReadSetWithSharedUMI.getReads().size() > 0){
+            apply(currentReadSetWithSharedUMI,
+                    new ReferenceContext(reference, currentReadSetWithSharedUMI.getDuplicateSetInterval()),
+                    new FeatureContext(features, currentReadSetWithSharedUMI.getDuplicateSetInterval()));
         }
     }
 }

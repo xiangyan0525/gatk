@@ -1,19 +1,15 @@
 package org.broadinstitute.hellbender.tools.walkers.consensus;
 
-import org.apache.commons.math3.random.RandomGenerator;
-import org.apache.commons.math3.random.RandomGeneratorFactory;
 import org.broadinstitute.barclay.argparser.Argument;
 import org.broadinstitute.barclay.argparser.CommandLineProgramProperties;
 import org.broadinstitute.hellbender.cmdline.StandardArgumentDefinitions;
 import org.broadinstitute.hellbender.engine.DuplicateSetWalker;
 import org.broadinstitute.hellbender.engine.FeatureContext;
+import org.broadinstitute.hellbender.engine.GATKPathSpecifier;
 import org.broadinstitute.hellbender.engine.ReferenceContext;
-import org.broadinstitute.hellbender.tools.walkers.mutect.consensus.DuplicateSet;
-import org.broadinstitute.hellbender.utils.io.IOUtils;
 import org.broadinstitute.hellbender.utils.read.SAMFileGATKReadWriter;
 import picard.cmdline.programgroups.ReadDataManipulationProgramGroup;
 
-import java.io.File;
 import java.util.List;
 import java.util.Random;
 
@@ -28,7 +24,7 @@ import java.util.Random;
  *
  * The input bam must have been sorted by UMI using FGBio GroupReadsByUmi (http://fulcrumgenomics.github.io/fgbio/tools/latest/GroupReadsByUmi.html).
  *
- * Use this tool to create, for instance, an insilico mixture of duplex-sequenced samples to simulate tumor subclone.
+ * Use this tool to create, for instance, an insilico mixture of duplex-sequenced samples to simulate tumor subclones.
  * Suppose you wish to simulate a tumor sample in which 5% cells share a common set of somatic mutations
  * in addition to ones common to the entire cell population.
  *
@@ -55,35 +51,34 @@ import java.util.Random;
  **/
 public class DownsampleByDuplicateSet extends DuplicateSetWalker {
     @Argument(fullName = StandardArgumentDefinitions.OUTPUT_LONG_NAME, shortName = StandardArgumentDefinitions.OUTPUT_SHORT_NAME, doc = "")
-    public File outputBam;
+    public GATKPathSpecifier outputBam;
 
-    @Argument(fullName = "DS", doc = "This fraction of duplicate sets in the input bam will be retained")
+    @Argument(fullName = "fraction-to-keep", doc = "This fraction of duplicate sets in the input bam will be retained", minValue = 0.0, maxValue = 1.0)
     public double downsamplingRate;
 
-    @Argument(fullName = "keep-duplex-only", doc = "Discard all duplicate sets that don't have duplex evidence")
-    public boolean duplexOnly = false;
+    @Argument(fullName = "keep-duplex-only", doc = "Discard all duplicate sets that don't have reads from both strands")
+    public boolean keepDuplexOnly = false;
 
     private static final int RANDOM_SEED = 142;
-    private RandomGenerator rng;
-    private static int numFragments;
-    private static int numReads;
+    private Random rng;
+    private int numFragments;
+    private int numReads;
     private SAMFileGATKReadWriter outputWriter;
 
     @Override
     public void onTraversalStart() {
-        super.onTraversalStart();
-        rng = RandomGeneratorFactory.createRandomGenerator(new Random(RANDOM_SEED));
-        outputWriter = createSAMWriter(IOUtils.getPath(outputBam.getAbsolutePath()), false);
+        rng = new Random(RANDOM_SEED);
+        outputWriter = createSAMWriter(outputBam.toPath(), false);
     }
 
     @Override
-    public void apply(DuplicateSet duplicateSet, ReferenceContext referenceContext, FeatureContext featureContext) {
-        if (filterDuplicateSet(duplicateSet)){
+    public void apply(ReadSetWithSharedUMI readSetWithSharedUMI, ReferenceContext referenceContext, FeatureContext featureContext) {
+        if (filterDuplicateSet(readSetWithSharedUMI)){
             return;
         }
         if (rng.nextDouble() < downsamplingRate){
-            duplicateSet.getReads().forEach(r -> outputWriter.addRead(r));
-            numReads += duplicateSet.getReads().size();
+            readSetWithSharedUMI.getReads().forEach(r -> outputWriter.addRead(r));
+            numReads += readSetWithSharedUMI.getReads().size();
             numFragments += 1;
         }
     }
@@ -96,16 +91,22 @@ public class DownsampleByDuplicateSet extends DuplicateSetWalker {
         return "SUCCESS";
     }
 
-    private boolean filterDuplicateSet(final DuplicateSet duplicateSet){
-        if (duplicateSet.getReads().size() % 2 == 1){
+    @Override
+    public void closeTool(){
+        if (outputWriter != null) {
+            outputWriter.close();
+        }
+    }
+
+    private boolean filterDuplicateSet(final ReadSetWithSharedUMI readSetWithSharedUMI){
+        if (readSetWithSharedUMI.getReads().size() % 2 == 1){
             // We only keep reads with mates by default, as that's what fgbio GroupByUMI requires.
-            logger.info("Duplicate set that contains an unpaired read discarded: " + duplicateSet.getReads().get(0));
+            logger.info("Duplicate set that contains an unpaired read discarded: " + readSetWithSharedUMI.getReads().get(0));
             return true;
         }
 
-        // Experiment: only keep duplex
-        if (duplexOnly){
-            final List<String> molecularIDs = DuplicateSet.getMolecularIDs(duplicateSet.getReads());
+        if (keepDuplexOnly){
+            final List<String> molecularIDs = ReadSetWithSharedUMI.getMolecularIDs(readSetWithSharedUMI.getReads());
             return molecularIDs.size() != 2;
         }
 
