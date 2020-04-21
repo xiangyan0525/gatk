@@ -330,6 +330,7 @@ public final class GermlineCNVCaller extends CommandLineProgram {
                 inputContigPloidyCallsDir,
                 inputModelDir,
                 inputAnnotatedIntervalsFile);
+        CopyNumberArgumentValidationUtils.checkForSingletonIntervals(specifiedIntervals);
         Utils.nonEmpty(outputPrefix);
         CopyNumberArgumentValidationUtils.validateAndPrepareOutputDirectories(outputDir);
     }

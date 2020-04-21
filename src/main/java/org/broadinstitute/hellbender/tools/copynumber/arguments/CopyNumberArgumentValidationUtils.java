@@ -22,10 +22,7 @@ import org.broadinstitute.hellbender.utils.python.PythonScriptExecutor;
 
 import java.io.File;
 import java.io.IOException;
-import java.util.HashSet;
-import java.util.List;
-import java.util.OptionalInt;
-import java.util.Set;
+import java.util.*;
 import java.util.stream.Collectors;
 import java.util.stream.IntStream;
 import java.util.stream.Stream;
@@ -71,6 +68,25 @@ public final class CopyNumberArgumentValidationUtils {
                     String.format("Records contain at least two overlapping intervals: %s and %s",
                             intervals.get(index - 1), intervals.get(index)));
         }
+    }
+
+    /**
+     * Validate that interval collection does not have singleton intervals, i.e. intervals that are the only ones
+     * on their corresponding contigs.
+     *
+     * @param intervalCollection simple interval collection to validate
+     */
+    public static void checkForSingletonIntervals(final SimpleIntervalCollection intervalCollection) {
+        final Map<String, Long> contigToCountMap = IntStream.range(0, intervalCollection.size())
+                .mapToObj(i -> intervalCollection.getRecords().get(i))
+                .collect(Collectors.groupingBy(SimpleInterval::getContig, Collectors.counting()));
+        contigToCountMap.keySet().forEach(c -> {
+            if (contigToCountMap.get(c) == 1) {
+                throw new IllegalArgumentException(
+                        String.format("Records contain a singleton interval on contig (%s)." +
+                                " Please run FilterIntervals tool first.", c));
+            }
+        });
     }
 
     /**

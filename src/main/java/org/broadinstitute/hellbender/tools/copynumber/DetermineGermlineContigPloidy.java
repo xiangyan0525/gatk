@@ -323,6 +323,7 @@ public final class DetermineGermlineContigPloidy extends CommandLineProgram {
         CopyNumberArgumentValidationUtils.validateInputs(
                 inputContigPloidyPriorsFile,
                 inputModelDir);
+        CopyNumberArgumentValidationUtils.checkForSingletonIntervals(specifiedIntervals);
         Utils.nonEmpty(outputPrefix);
         CopyNumberArgumentValidationUtils.validateAndPrepareOutputDirectories(outputDir);
     }
