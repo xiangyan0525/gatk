@@ -99,7 +99,7 @@ public abstract class ReadWalker extends WalkerBase {
 
                     progressMeter.update(readInterval);
                 });
-        postProcess();
+        finalizeTraversal();
         logger.info(countedFilter.getSummaryLine());
     }
 
@@ -168,7 +168,12 @@ public abstract class ReadWalker extends WalkerBase {
         super.onShutdown();
     }
 
-    public void postProcess(){
+    /**
+     * An abstract tool might override this method to process information at the end of the traversal, while it can still
+     * access the last read or anything the tool collect over the course of the traversal that will not
+     * be accessible in {@link onTraversalSuccess} i.e. after the traversal.
+     */
+    protected void finalizeTraversal(){
         return;
     }
 }

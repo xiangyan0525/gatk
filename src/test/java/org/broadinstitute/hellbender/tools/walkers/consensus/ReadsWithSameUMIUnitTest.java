@@ -10,27 +10,25 @@ import org.testng.annotations.Test;
 import java.util.ArrayList;
 import java.util.List;
 
-public class ReadSetWithSharedUMIUnitTest extends BaseTest {
+public class ReadsWithSameUMIUnitTest extends BaseTest {
     // Parameters for the default reads
     final String contig = "3";
     final int numReadPairs = 30;
     final int moleculeNumber = 10;
-    final int readLength = 146;
 
     @Test
     public void testAddRead(){
         final List<GATKRead> reads = makeReads(numReadPairs, contig, moleculeNumber, "read");
-        final ReadSetWithSharedUMI set = new ReadSetWithSharedUMI(reads.get(0));
+        final ReadsWithSameUMI set = new ReadsWithSameUMI(reads.get(0));
         reads.stream().skip(1).forEach(r -> set.addRead(r));
 
         Assert.assertEquals(set.getReads().size(), reads.size());
-        // Adding a read from a different contig (even if the molecule ID somehow matches) throws an error
     }
 
     @Test(expectedExceptions = IllegalStateException.class)
     public void testAddDifferentMolecule(){
         final List<GATKRead> reads = makeReads(1, contig, moleculeNumber, "one_molecule");
-        final ReadSetWithSharedUMI set = new ReadSetWithSharedUMI(reads.get(0));
+        final ReadsWithSameUMI set = new ReadsWithSameUMI(reads.get(0));
         reads.stream().skip(1).forEach(set::addRead);
 
         // Add reads from a different molecule
@@ -38,10 +36,11 @@ public class ReadSetWithSharedUMIUnitTest extends BaseTest {
         readsFromAnotherMolecule.forEach(set::addRead); // Throws an exception
     }
 
+    // Adding a read from a different contig (even if the molecule ID matches) must throw an error
     @Test(expectedExceptions = IllegalStateException.class)
     public void testAddDifferentContig(){
         final List<GATKRead> reads = makeReads(1, contig, moleculeNumber, "one_molecule");
-        final ReadSetWithSharedUMI set = new ReadSetWithSharedUMI(reads.get(0));
+        final ReadsWithSameUMI set = new ReadsWithSameUMI(reads.get(0));
         reads.stream().skip(1).forEach(set::addRead);
 
         // Add reads from a different molecule
@@ -50,8 +49,10 @@ public class ReadSetWithSharedUMIUnitTest extends BaseTest {
         readsFromAnotherMolecule.forEach(set::addRead); // Throws an exception
     }
 
-    private List<GATKRead> makeReads(final int numReadPairs, final String contig, final int moleculeNumber,
-                                     final String readName){
+    // Helper method to generate test reads
+    public static List<GATKRead> makeReads(final int numReadPairs, final String contig, final int moleculeNumber,
+                                           final String readName){
+        final int readLength = 146;
         final List<GATKRead> reads = new ArrayList<>(numReadPairs);
         final List<GATKRead> mates = new ArrayList<>(numReadPairs);
 

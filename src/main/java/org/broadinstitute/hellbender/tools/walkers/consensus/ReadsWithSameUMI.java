@@ -34,7 +34,7 @@ import java.util.stream.Collectors;
  * For instance, 1/A and 1/B may be in the same set, as they share the same UMI.
  * But 2/A and 3/A may not be in the same set.
  */
-public class ReadSetWithSharedUMI implements Locatable {
+public class ReadsWithSameUMI implements Locatable {
     public static final String FGBIO_MI_TAG_DELIMITER = "/";
     public MoleculeID moleculeID;
 
@@ -42,7 +42,7 @@ public class ReadSetWithSharedUMI implements Locatable {
 
     private List<GATKRead> reads;
 
-    public ReadSetWithSharedUMI(final GATKRead read){
+    public ReadsWithSameUMI(final GATKRead read){
         reads = new ArrayList<>();
         init(read);
     }
@@ -103,5 +103,4 @@ public class ReadSetWithSharedUMI implements Locatable {
     public int getEnd() {
         return interval.getEnd();
     }
-
 }

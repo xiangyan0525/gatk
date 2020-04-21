@@ -1,7 +1,6 @@
 package org.broadinstitute.hellbender.tools.walkers.consensus;
 
 import htsjdk.samtools.SAMTag;
-import org.apache.commons.lang3.mutable.MutableInt;
 import org.broadinstitute.hellbender.CommandLineProgramTest;
 import org.broadinstitute.hellbender.engine.ReadsDataSource;
 import org.broadinstitute.hellbender.exceptions.UserException;
@@ -60,15 +59,20 @@ public class DownsampleByDuplicateSetTest extends CommandLineProgramTest {
                 final int originalMoleculeCount = countDuplicateSets(originalBam);
                 final int downsampledMoleculeCount = countDuplicateSets(downsampledBam);
 
-                if (downsampleRate == 0.0){ // Keep 0% of the reads
+                if (downsampleRate == 0.0){ // Keep none of the reads
                     Assert.assertEquals(downsampledMoleculeCount, 0.0);
+                    continue;
                 }
 
                 if (downsampleRate == 1.0){ // Keep all of the reads
                     Assert.assertEquals(downsampledMoleculeCount, originalMoleculeCount);
+                    continue;
                 }
 
-                final double noise = 2.0;
+                // In addition to the stochastic noise, there's an additional source of deviation from the mean due to
+                // the fact that we are downsampling by molecule, whose family size may vary and therefore is not the same thing as
+                // dropping 5% of the reads, for example.
+                final double noise = originalMoleculeCount*0.05; // allow for a 5% deviation from the expected
                 final double deviationFromExpected = Math.abs(downsampleRate * originalMoleculeCount - downsampledMoleculeCount);
                 Assert.assertTrue(deviationFromExpected < noise);
             } catch (Exception e) {
@@ -92,20 +96,5 @@ public class DownsampleByDuplicateSetTest extends CommandLineProgramTest {
         }
 
         return count;
-    }
-
-    private Map<String, MutableInt> molecularIDsAndCounts(final ReadsDataSource readsDataSource){
-        final Map<String, MutableInt> map = new TreeMap<>();
-        final Iterator<GATKRead> iterator = readsDataSource.iterator();
-        while (iterator.hasNext()){
-            final GATKRead read = iterator.next();
-            final String molecularID = read.getAttributeAsString("MI"); // Note we are duplex aware: 12/A different from 12/B
-            if (map.containsKey(molecularID)){
-                map.get(molecularID).increment();
-            } else {
-                map.put(molecularID, new MutableInt(0));
-            }
-        }
-        return map;
     }
 }
