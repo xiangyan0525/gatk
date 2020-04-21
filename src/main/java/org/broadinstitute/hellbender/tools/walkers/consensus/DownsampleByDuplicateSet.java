@@ -10,7 +10,6 @@ import org.broadinstitute.hellbender.engine.ReferenceContext;
 import org.broadinstitute.hellbender.utils.read.SAMFileGATKReadWriter;
 import picard.cmdline.programgroups.ReadDataManipulationProgramGroup;
 
-import java.util.List;
 import java.util.Random;
 
 @CommandLineProgramProperties(
@@ -48,20 +47,26 @@ import java.util.Random;
  * While trivial when the input bam is sorted by UMI and query name, this is far from trivial when one attempts
  * to downsample reads naively with a tool like {@link PrintReads}.
  *
+ * Example Usage:
+ *
+ * Keep 95 percent of the molecules.
+ *
+ * gatk DownsampleByDuplicateSet \ \
+ * -I umiGrouped.bam \
+ * --fraction-to-keep 0.95 \
+ * -O umiGrouped_0.95.bam
  **/
 public class DownsampleByDuplicateSet extends DuplicateSetWalker {
     @Argument(fullName = StandardArgumentDefinitions.OUTPUT_LONG_NAME, shortName = StandardArgumentDefinitions.OUTPUT_SHORT_NAME, doc = "")
     public GATKPathSpecifier outputBam;
 
-    @Argument(fullName = "fraction-to-keep", doc = "This fraction of duplicate sets in the input bam will be retained", minValue = 0.0, maxValue = 1.0)
-    public double downsamplingRate;
-
-    @Argument(fullName = "keep-duplex-only", doc = "Discard all duplicate sets that don't have reads from both strands")
-    public boolean keepDuplexOnly = false;
+    public static final String FRACTION_TO_KEEP_NAME = "fraction-to-keep";
+    @Argument(fullName = FRACTION_TO_KEEP_NAME, doc = "This fraction of duplicate sets in the input bam will be retained", minValue = 0.0, maxValue = 1.0)
+    public double fractionToKeep;
 
     private static final int RANDOM_SEED = 142;
     private Random rng;
-    private int numFragments;
+    private int numDuplicateReadSets;
     private int numReads;
     private SAMFileGATKReadWriter outputWriter;
 
@@ -73,13 +78,10 @@ public class DownsampleByDuplicateSet extends DuplicateSetWalker {
 
     @Override
     public void apply(ReadSetWithSharedUMI readSetWithSharedUMI, ReferenceContext referenceContext, FeatureContext featureContext) {
-        if (filterDuplicateSet(readSetWithSharedUMI)){
-            return;
-        }
-        if (rng.nextDouble() < downsamplingRate){
+        if (rng.nextDouble() < fractionToKeep){
             readSetWithSharedUMI.getReads().forEach(r -> outputWriter.addRead(r));
             numReads += readSetWithSharedUMI.getReads().size();
-            numFragments += 1;
+            numDuplicateReadSets += 1;
         }
     }
 
@@ -87,7 +89,7 @@ public class DownsampleByDuplicateSet extends DuplicateSetWalker {
     public Object onTraversalSuccess(){
         outputWriter.close();
         logger.info(String.format("Wrote %d reads", numReads));
-        logger.info(String.format("Wrote %d fragments", numFragments));
+        logger.info(String.format("Wrote %d duplicate read sets", numDuplicateReadSets));
         return "SUCCESS";
     }
 
@@ -96,20 +98,5 @@ public class DownsampleByDuplicateSet extends DuplicateSetWalker {
         if (outputWriter != null) {
             outputWriter.close();
         }
-    }
-
-    private boolean filterDuplicateSet(final ReadSetWithSharedUMI readSetWithSharedUMI){
-        if (readSetWithSharedUMI.getReads().size() % 2 == 1){
-            // We only keep reads with mates by default, as that's what fgbio GroupByUMI requires.
-            logger.info("Duplicate set that contains an unpaired read discarded: " + readSetWithSharedUMI.getReads().get(0));
-            return true;
-        }
-
-        if (keepDuplexOnly){
-            final List<String> molecularIDs = ReadSetWithSharedUMI.getMolecularIDs(readSetWithSharedUMI.getReads());
-            return molecularIDs.size() != 2;
-        }
-
-        return false;
     }
 }

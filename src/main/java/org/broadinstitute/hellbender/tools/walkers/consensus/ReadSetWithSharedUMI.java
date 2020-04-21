@@ -2,7 +2,6 @@ package org.broadinstitute.hellbender.tools.walkers.consensus;
 
 import htsjdk.samtools.SAMTag;
 import htsjdk.samtools.util.Locatable;
-import org.broadinstitute.hellbender.tools.walkers.mutect.UMI;
 import org.broadinstitute.hellbender.utils.SimpleInterval;
 import org.broadinstitute.hellbender.utils.Utils;
 import org.broadinstitute.hellbender.utils.read.GATKRead;
@@ -13,159 +12,96 @@ import java.util.List;
 import java.util.stream.Collectors;
 
 /**
- * A container class for a set of reads that share the same unique molecular identifier, as determined by
+ * A container class for a set of reads that share the same unique molecular identifier (UMI) as judged by
  * FGBio GroupReadsByUmi (http://fulcrumgenomics.github.io/fgbio/tools/latest/GroupReadsByUmi.html)
+ *
+ * Examples of molecule IDs (MI tag):
+ *
+ * "0/A" (The first molecule in the bam, A strand)
+ * "0/B" (The first molecule in the bam, B strand)
+ * "99/A" (100th molecule in the bam, A strand)
+ *
+ * For a given set of reads with the same molecule number, the strand with a larger number of reads is defined as the A strand.
+ * i.e. A and B strand doesn't map to top or bottom strand.
+ *
+ * I use "top strand" as a synonym for "F1R2". "Bottom strand" is synonymous to "F2R1."
+ *
+ * Thus only the integer component is relevant for identifying reads that originated from the same molecule.
+ * Should the need arise, we could extend this to distinguish between different strands of the same molecule.
+ *
+ * All reads in the set must share the same molecular number; this allows for reads that originated from the same fragment before PCR
+ * but from the different strands to be grouped in the same set.
+ * For instance, 1/A and 1/B may be in the same set, as they share the same UMI.
+ * But 2/A and 3/A may not be in the same set.
  */
 public class ReadSetWithSharedUMI implements Locatable {
     public static final String FGBIO_MI_TAG_DELIMITER = "/";
-    private static final int EMPTY_MOLECULE_ID = -1;
-    private int moleculeId = EMPTY_MOLECULE_ID; // TODO: extract an ID class.
+    public MoleculeID moleculeID;
 
-    private String contig;
-    private int fragmentStart = -1;
-    private int fragmentEnd = -1;
+    private SimpleInterval interval;
 
     private List<GATKRead> reads;
 
-    public ReadSetWithSharedUMI(){
-        reads = new ArrayList<>();
-    }
-
     public ReadSetWithSharedUMI(final GATKRead read){
-        this();
+        reads = new ArrayList<>();
         init(read);
-        reads.add(read);
     }
 
     private void init(GATKRead read){
-        Utils.validate(moleculeId == -1 || moleculeId == getMoleculeID(read),
-                String.format("Inconsistent molecule IDs: Duplicate set id = %s, read molecule id = %s", moleculeId, getMoleculeID(read)));
-        setMoleduleId(read);
-        contig = read.getContig();
-        fragmentStart = read.getStart();
-        fragmentEnd = read.getEnd(); // TODO: does this include softclips?
+        Utils.validate(reads.isEmpty(), String.format("Initializing a non-empty set"));
+        moleculeID = new MoleculeID(read);
+        interval = new SimpleInterval(read.getContig(), read.getStart(), read.getEnd());
+        reads.add(read);
     }
 
     public List<GATKRead> getReads(){
         return Collections.unmodifiableList(reads);
     }
 
-    public boolean sameMolecule(final GATKRead read){
-        return getMoleculeID(read) == moleculeId;
-    }
-
-    public void setMoleduleId(GATKRead read){
-        moleculeId = getMoleculeID(read);
-    }
-
-    public void setMoleduleId(int id){
-        moleculeId = id;
-    }
-
     /**
-     * Some examples of molecule IDs (MI tag):
-     *
-     * "0/A" (The first molecule in the bam, top (A) strand)
-     * "0/B" (The first molecule in the bam, bottom (B) strand)
-     * "99/A" (100th molecule in the bam, top top (A) strand)
-     *
-     * Top strand is synonymous to "F1R2"
-     * Bottom strand is synonymous to "F2R1"
-     *
-     * Thus only the integer component is relevant for identifying reads that originated from the same molecule.
-     * Should the need arise, we could extend this to distinguish between different strands of the same molecule.
-     */
-    public static int getMoleculeID(final GATKRead read) {
-        Utils.validateArg(read.hasAttribute(SAMTag.MI.name()),
-                "Reads must have the molecular ID Tag: " + SAMTag.MI.name() + ". Read = " + read.toString());
-        final String MITag = read.getAttributeAsString(SAMTag.MI.name());
-        return Integer.parseInt(MITag.split(FGBIO_MI_TAG_DELIMITER)[0]);
-    }
+     * Add a read to the set. Throws an error if the molecule ID doens't match.
+     * **/
+    public void addRead(final GATKRead read){
+        Utils.validate(reads.isEmpty() || moleculeID.getMoleculeNumber() == MoleculeID.getMoleculeNumberOfRead(read),
+                String.format("Molecule number of the set and that of the new read don't match: set number = %d, read number = %d", moleculeID.getMoleculeNumber(), MoleculeID.getMoleculeNumberOfRead(read)));
+        Utils.validate(interval.getContig().equals(read.getContig()),
+                String.format("Adding a read from another contig: set contig = %s, read contig = %s", interval.getContig(), read.getContig()));
 
-    /** Returns true if the read was properly added to the duplicate set **/
-    public boolean addRead(final GATKRead read){
         if (reads.isEmpty()){
             init(read);
-            reads.add(read);
-            return true;
+            return;
         }
 
-        if (sameMolecule(read)){
-            reads.add(read);
-            if (read.getStart() < fragmentStart){
-                fragmentStart = read.getStart();
-            }
-            if (read.getEnd() > fragmentEnd){
-                fragmentEnd = read.getEnd();
-            }
-            return true;
-        } else {
-            return false;
-        }
+        reads.add(read);
+        interval = interval.spanWith(read);
     }
 
     public boolean isEmpty(){
         return reads.isEmpty();
     }
 
-    public int getMoleculeId() {
-        if (this.isEmpty()){
-            return EMPTY_MOLECULE_ID;
-        }
-        return moleculeId;
+    public int getMoleculeNumber() {
+        Utils.nonNull(moleculeID, "Querying a non-initialized set for a molecule number");
+        return moleculeID.getMoleculeNumber();
     }
 
-    public SimpleInterval getDuplicateSetInterval(){
-        return new SimpleInterval(contig, fragmentStart, fragmentEnd);
-    }
-
-    public boolean hasValidInterval(){
-        return SimpleInterval.isValid(contig, fragmentStart, fragmentEnd);
-    }
-
-    public static List<String> getMolecularIDs(final List<GATKRead> reads) {
-        return reads.stream().map(r -> r.getAttributeAsString(ReadSetWithSharedUMI.SAMTag.MI.name()))
-                .distinct().collect(Collectors.toList());
+    public SimpleInterval getInterval(){
+        return interval;
     }
 
     @Override
     public String getContig() {
-        return contig;
+        return interval.getContig();
     }
 
     @Override
     public int getStart() {
-        return fragmentStart;
+        return interval.getStart();
     }
 
     @Override
     public int getEnd() {
-        return fragmentEnd;
+        return interval.getEnd();
     }
 
-    /**
-     * A container class for the molecular ID, which consists of an integer ID and a binary strand.
-     * For example, Reads with the tags 12/A and 12/B originated from the same DNA fragment before PCR,
-     * (i.e. from the same library) but they originated from different strands in that library.
-     * Thus one read is F1R2 and the other F2R1.
-     */
-    private static class MoleculeIDTag {
-        private int molecularID;
-        private String strand;
-
-        private MoleculeIDTag(final GATKRead read){
-            final String MITag = read.getAttributeAsString(SAMTag.MI.name());
-
-            this.molecularID = Integer.parseInt(MITag.split(FGBIO_MI_TAG_DELIMITER)[0]);
-            this.strand = MITag.split(FGBIO_MI_TAG_DELIMITER)[1];
-        }
-
-        public int getMoleculeID() {
-            return molecularID;
-        }
-
-        public String getStrand() {
-            return strand;
-        }
-    }
 }

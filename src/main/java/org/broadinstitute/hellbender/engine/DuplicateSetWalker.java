@@ -1,9 +1,10 @@
 package org.broadinstitute.hellbender.engine;
 
+import org.apache.commons.lang3.tuple.Pair;
 import org.broadinstitute.barclay.argparser.Argument;
 import org.broadinstitute.hellbender.exceptions.UserException;
+import org.broadinstitute.hellbender.tools.walkers.consensus.MoleculeID;
 import org.broadinstitute.hellbender.tools.walkers.consensus.ReadSetWithSharedUMI;
-import org.broadinstitute.hellbender.utils.Utils;
 import org.broadinstitute.hellbender.utils.read.GATKRead;
 
 /**
@@ -13,13 +14,20 @@ import org.broadinstitute.hellbender.utils.read.GATKRead;
  * http://fulcrumgenomics.github.io/fgbio/tools/latest/GroupReadsByUmi.html
  */
 public abstract class DuplicateSetWalker extends ReadWalker {
-    public static final String MIN_REQUIRED_READS_NAME = "min";
-    private static final int DEFAULT_MINIMUM_READS_IN_DUPLICATE_SET = 1;
+    public static final String MIN_REQUIRED_READS_NAME = "min-reads";
+    public static final String MIN_REQUIRED_READS_PER_STRAND_NAME = "min-per-strand-reads";
 
-    @Argument(fullName = MIN_REQUIRED_READS_NAME, optional = true)
-    private int minimumRequiredReadsInDuplicateSet = DEFAULT_MINIMUM_READS_IN_DUPLICATE_SET;
+    private static final int DEFAULT_MINIMUM_READS_PER_SET = 1;
+    private static final int DEFAULT_MINIMUM_READS_PER_STRAND = 0;
 
-    private ReadSetWithSharedUMI currentReadSetWithSharedUMI = new ReadSetWithSharedUMI();
+    @Argument(fullName = MIN_REQUIRED_READS_NAME, doc = "The mininum total number of reads required in the set", optional = true)
+    private int minimumRequiredReadsPerUMI = DEFAULT_MINIMUM_READS_PER_SET;
+
+    /** The user may keep only read sets with both strands by setting this argument to a positive number **/
+    @Argument(fullName = MIN_REQUIRED_READS_PER_STRAND_NAME, doc = "The mininum total number of reads in each strand", optional = true)
+    private int minimumRequiredReadsPerStrand = DEFAULT_MINIMUM_READS_PER_STRAND;
+
+    private ReadSetWithSharedUMI currentReadSetWithSharedUMI = null;
 
     /***
      * FGBio GroupByUMI returns reads sorted by molecular ID: For example, the input bam may look like
@@ -40,29 +48,39 @@ public abstract class DuplicateSetWalker extends ReadWalker {
      */
     @Override
     public final void apply(GATKRead read, ReferenceContext referenceContext, FeatureContext featureContext) {
-        final int readMoleculeID = ReadSetWithSharedUMI.getMoleculeID(read);
-        final int duplicateSetMoleculeId = currentReadSetWithSharedUMI.getMoleculeId();
+        if (currentReadSetWithSharedUMI == null){ // evaluate to true for the very first read
+            currentReadSetWithSharedUMI = new ReadSetWithSharedUMI(read);
+            return;
+        }
+
+        final int readMoleculeNumber = MoleculeID.getMoleculeNumberOfRead(read);
+        final int duplicateSetMoleculeNumber = currentReadSetWithSharedUMI.getMoleculeNumber();
 
         // If the incoming read has the molecular id less than that of the currentDuplicateSet,
         // the bam is not sorted properly by the MI tag
-        if (duplicateSetMoleculeId > readMoleculeID){
+        if (duplicateSetMoleculeNumber > readMoleculeNumber){
             throw new UserException("The input bam must be sorted by the molecularID tag.");
-        } else if (duplicateSetMoleculeId < readMoleculeID) {
-            // If the currentDuplicateSet is empty or does not match the incoming read,
-            // call apply() method on the current duplicate set, and replace it with a new set with the most recent read in it
-            if (rejectDuplicateSet(currentReadSetWithSharedUMI)){
+        }
+
+        // Check for greater than 0 because before apply() is called on the first read, the set would be empty and we use -1 as a placeholder
+        if (duplicateSetMoleculeNumber < readMoleculeNumber) {
+            // If the currentDuplicateSet is empty or does not match the incoming read, we've reached the end of the current set.
+            // Call the apply() method on the current set and start a new set.
+            if (rejectSet(currentReadSetWithSharedUMI)){
                 currentReadSetWithSharedUMI = new ReadSetWithSharedUMI(read);
                 return;
             }
 
             apply(currentReadSetWithSharedUMI,
-                    new ReferenceContext(reference, currentReadSetWithSharedUMI.getDuplicateSetInterval()), // Will create an empty ReferenceContext if reference or readInterval == null
-                    new FeatureContext(features, currentReadSetWithSharedUMI.getDuplicateSetInterval()));
+                    new ReferenceContext(reference, currentReadSetWithSharedUMI.getInterval()), // Will create an empty ReferenceContext if reference or readInterval == null
+                    new FeatureContext(features, currentReadSetWithSharedUMI.getInterval()));
             currentReadSetWithSharedUMI = new ReadSetWithSharedUMI(read);
-        } else {
-            // the molecule ID of the read matches that of the current duplicate set
-            Utils.validate(currentReadSetWithSharedUMI.addRead(read), "Adding a read that doesn't have a matching molecular ID tag");
+            return;
         }
+
+
+        // the incoming read has the same UMI as the current set
+        currentReadSetWithSharedUMI.addRead(read);
     }
 
     /**
@@ -79,18 +97,30 @@ public abstract class DuplicateSetWalker extends ReadWalker {
     /**
      * Returns true for duplicate sets that does not meet required criteria for further processing.
      *
-     * A subclass may override this method to meet its needs.
+     * We encourage the user override this method to meet their needs.
      */
-    protected boolean rejectDuplicateSet(final ReadSetWithSharedUMI readSetWithSharedUMI){
-        return !readSetWithSharedUMI.hasValidInterval() || readSetWithSharedUMI.getReads().size() < minimumRequiredReadsInDuplicateSet;
+    protected boolean rejectSet(final ReadSetWithSharedUMI readSetWithSharedUMI){
+        // Check that the set contains the minimum required number of reads in each strand
+        final Pair<Integer, Integer> strandCounts = MoleculeID.countStrands(readSetWithSharedUMI.getReads());
+        if (Math.min(strandCounts.getLeft(), strandCounts.getRight()) < minimumRequiredReadsPerStrand){
+            return true;
+        }
+
+        // Check that the read set is paired (checking for a sufficient condition)
+        if (readSetWithSharedUMI.getReads().size() % 2 == 1){
+            return true;
+        }
+
+        // Check that the total number of reads (from both strands) exceeds a specified threshold
+        return readSetWithSharedUMI.getReads().size() < minimumRequiredReadsPerUMI;
     }
 
     @Override
     public void postProcess(){
         if (currentReadSetWithSharedUMI.getReads().size() > 0){
             apply(currentReadSetWithSharedUMI,
-                    new ReferenceContext(reference, currentReadSetWithSharedUMI.getDuplicateSetInterval()),
-                    new FeatureContext(features, currentReadSetWithSharedUMI.getDuplicateSetInterval()));
+                    new ReferenceContext(reference, currentReadSetWithSharedUMI.getInterval()),
+                    new FeatureContext(features, currentReadSetWithSharedUMI.getInterval()));
         }
     }
 }
