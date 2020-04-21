@@ -323,7 +323,6 @@ public final class DetermineGermlineContigPloidy extends CommandLineProgram {
         CopyNumberArgumentValidationUtils.validateInputs(
                 inputContigPloidyPriorsFile,
                 inputModelDir);
-        CopyNumberArgumentValidationUtils.checkForSingletonIntervals(specifiedIntervals);
         Utils.nonEmpty(outputPrefix);
         CopyNumberArgumentValidationUtils.validateAndPrepareOutputDirectories(outputDir);
     }
@@ -359,6 +358,7 @@ public final class DetermineGermlineContigPloidy extends CommandLineProgram {
             specifiedIntervals = CopyNumberArgumentValidationUtils.resolveIntervals(
                     firstReadCountPath, intervalArgumentCollection, logger);
         }
+        CopyNumberArgumentValidationUtils.checkForSingletonIntervals(specifiedIntervals);
     }
 
     private void writeSamplesByCoveragePerContig(final File samplesByCoveragePerContigFile) {

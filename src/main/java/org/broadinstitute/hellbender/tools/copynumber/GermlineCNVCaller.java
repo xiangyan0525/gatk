@@ -330,7 +330,6 @@ public final class GermlineCNVCaller extends CommandLineProgram {
                 inputContigPloidyCallsDir,
                 inputModelDir,
                 inputAnnotatedIntervalsFile);
-        CopyNumberArgumentValidationUtils.checkForSingletonIntervals(specifiedIntervals);
         Utils.nonEmpty(outputPrefix);
         CopyNumberArgumentValidationUtils.validateAndPrepareOutputDirectories(outputDir);
     }
@@ -362,7 +361,7 @@ public final class GermlineCNVCaller extends CommandLineProgram {
                 specifiedIntervals.write(specifiedIntervalsFile);
             }
         }
-
+        CopyNumberArgumentValidationUtils.checkForSingletonIntervals(specifiedIntervals);
         if (runMode.equals(RunMode.COHORT)) {
             logger.info("Running the tool in COHORT mode...");
             Utils.validateArg(inputReadCountPaths.size() > 1, "At least two samples must be provided in " +
